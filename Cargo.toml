@@ -1,0 +1,14 @@
+[package]
+name = "Nfs2Server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+rand = "0.8"
