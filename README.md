@@ -25,3 +25,7 @@ Roadmap:
 - Use a walking inode table for faster fh lookup
 - Implement proper rpcbind GETPORT and dynamic registration
 - Add configuration file with exports and client ACLs
+
+## LICENSE
+
+MPL 2.0 (Mozilla Public License Version 2.0). See [LICENSE](LICENSE.txt) file for details.
