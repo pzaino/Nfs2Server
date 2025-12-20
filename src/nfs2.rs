@@ -53,7 +53,7 @@ pub fn fh_from_path(path: &Path) -> Vec<u8> {
 fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
     info!("nfs2: path_from_fh fh_hex={}", hex::encode(fh));
     if fh.is_empty() {
-        return Some(root.to_path_buf());
+        fh = self.export_root_fh.clone();
     }
 
     let ino =
