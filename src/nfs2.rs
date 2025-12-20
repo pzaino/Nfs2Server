@@ -24,6 +24,19 @@ const NFS_OK: u32 = 0;
 const NFSERR_NOENT: u32 = 2;
 const NFSERR_ACCES: u32 = 13;
 
+#[derive(Clone)]
+pub struct Nfs2 {
+    exports: Exports,
+    root_fh: Vec<u8>,
+}
+
+pub fn new(exports: Exports) -> Self {
+    let root = Path::new("/tmp");
+    let root_fh = fh_from_path(root);
+
+    Self { exports, root_fh }
+}
+
 // ------------------------------------------------------------
 // File handle helpers
 // ------------------------------------------------------------
@@ -53,7 +66,7 @@ pub fn fh_from_path(path: &Path) -> Vec<u8> {
 fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
     info!("nfs2: path_from_fh fh_hex={}", hex::encode(fh));
     if fh.is_empty() {
-        fh = self.export_root_fh.clone();
+        return Some(root.to_path_buf());
     }
 
     let ino =
@@ -160,7 +173,10 @@ impl Nfs2 {
 
             // GETATTR
             1 => {
-                let fh = r.get_opaque().unwrap_or_default();
+                let mut fh = r.get_opaque().unwrap_or_default();
+                if fh.is_empty() {
+                    fh = self.root_fh.clone();
+                }
                 let mut w = XdrW::new();
 
                 info!(
@@ -219,7 +235,10 @@ impl Nfs2 {
 
             // READDIR
             16 => {
-                let fh = r.get_opaque().unwrap_or_default();
+                let mut fh = r.get_opaque().unwrap_or_default();
+                if fh.is_empty() {
+                    fh = self.root_fh.clone();
+                }
                 let cookie = r.get_u32().unwrap_or(0);
                 let _count = r.get_u32().unwrap_or(0);
 
