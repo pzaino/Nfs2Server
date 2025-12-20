@@ -54,8 +54,8 @@ pub fn fh_from_path(path: &Path) -> Vec<u8> {
 
 fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
     info!("nfs2: path_from_fh fh_hex={}", hex::encode(fh));
-    if fh.is_empty() {
-        return Some(root.to_path_buf());
+    if fh.len() != 32 {
+        return None;
     }
 
     let ino =
@@ -245,8 +245,9 @@ impl Nfs2 {
                         return Some(nfs_err(NFSERR_STALE));
                     }
                 }
+
                 let cookie = r.get_u32().unwrap_or(0);
-                let _count = r.get_u32().unwrap_or(0);
+                let count = r.get_u32().unwrap_or(0) as usize;
 
                 let mut w = XdrW::new();
 
@@ -254,8 +255,12 @@ impl Nfs2 {
                     if let Ok(rd) = fs::read_dir(&dir) {
                         w.put_u32(NFS_OK);
 
+                        // If client sends 0, pick a sane cap to avoid giant replies.
+                        // RISC OS can be quite sensitive here.
+                        let max_bytes = if count == 0 { 4096 } else { count };
+
                         let mut idx = 0u32;
-                        let mut sent_any = false;
+                        let mut eof = true;
 
                         for e in rd.flatten() {
                             if idx < cookie {
@@ -266,22 +271,33 @@ impl Nfs2 {
                             let name = e.file_name().to_string_lossy().into_owned();
                             let ino = e.metadata().map(|m| m.ino() as u32).unwrap_or(0);
 
+                            // Estimate how many bytes this entry will add in XDR.
+                            // entry = bool(4) + fileid(4) + string(len+pad+4) + cookie(4)
+                            // string encoding = u32 len + bytes + padding
+                            let name_len = name.as_bytes().len();
+                            let name_pad = (4 - (name_len % 4)) % 4;
+                            let entry_bytes = 4 + 4 + (4 + name_len + name_pad) + 4;
+
+                            // +8 for end markers (final 0 + eof bool) to keep room
+                            if w.buf.len() + entry_bytes + 8 > max_bytes {
+                                eof = false;
+                                break;
+                            }
+
                             w.put_u32(1); // entry follows
                             w.put_u32(ino); // fileid
                             w.put_string(&name); // filename
-                            w.put_u32(idx + 1); // cookie
-
-                            sent_any = true;
+                            w.put_u32(idx + 1); // cookie for next call
                             idx += 1;
                         }
 
                         w.put_u32(0); // end of entry list
-                        w.put_u32(1); // EOF = TRUE  ← THIS WAS MISSING
+                        w.put_u32(if eof { 1 } else { 0 }); // EOF flag
                     } else {
                         w.put_u32(NFSERR_NOENT);
                     }
                 } else {
-                    w.put_u32(NFSERR_NOENT);
+                    w.put_u32(NFSERR_STALE);
                 }
 
                 rpc_accept_reply(call.xid, 0, &w.buf)
