@@ -106,11 +106,13 @@ async fn main() -> Result<()> {
     let mountd = mountd::Mountd::new(exports.clone());
     let nfsd = nfs2::Nfs2::new(exports);
 
+    const MOUNTD_PORT: u16 = 20048;
+
     //
     // ---- Bind UDP sockets ----
     //
 
-    let mountd_udp = UdpSocket::bind("0.0.0.0:0").await?;
+    let mountd_udp = UdpSocket::bind(("0.0.0.0", MOUNTD_PORT)).await?;
     let mountd_udp_port = mountd_udp.local_addr()?.port();
 
     let nfs_udp = UdpSocket::bind("0.0.0.0:0").await?;
@@ -120,7 +122,7 @@ async fn main() -> Result<()> {
     // ---- Bind TCP sockets ----
     //
 
-    let mountd_tcp = TcpListener::bind("0.0.0.0:0").await?;
+    let mountd_tcp = TcpListener::bind(("0.0.0.0", MOUNTD_PORT)).await?;
     let mountd_tcp_port = mountd_tcp.local_addr()?.port();
 
     let nfs_tcp = TcpListener::bind("0.0.0.0:0").await?;
