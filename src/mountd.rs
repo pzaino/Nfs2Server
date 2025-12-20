@@ -79,7 +79,9 @@ impl Mountd {
                     self.mounts.lock().unwrap().insert(path.clone(), fh.clone());
 
                     w.put_opaque(&fh);
-                    w.put_u32(0); // auth flavors = empty
+                    // auth flavors
+                    w.put_u32(1); // count
+                    w.put_u32(1); // AUTH_UNIX
                 } else {
                     w.put_u32(13); // NFSERR_ACCES
                 }
