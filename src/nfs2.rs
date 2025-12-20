@@ -215,22 +215,49 @@ impl Nfs2 {
                 let mut w = XdrW::new();
 
                 info!(
-                    "nfs2: GETATTR raw file handle fh_len={}, fh_hex={}",
+                    peer,
+                    "nfs2: LOOKUP start fh_len={} fh_hex={} name='{}'",
                     dirfh.len(),
-                    hex::encode(&dirfh)
+                    hex::encode(&dirfh),
+                    name
                 );
+
                 if let Some(dir) = path_from_fh(root, &dirfh) {
-                    let p = dir.join(name);
+                    let p = dir.join(&name);
+
+                    info!(
+                        peer,
+                        "nfs2: LOOKUP resolved dir='{}' path='{}'",
+                        dir.display(),
+                        p.display()
+                    );
+
                     if let Ok(meta) = fs::metadata(&p) {
+                        info!(
+                            peer,
+                            "nfs2: LOOKUP success path='{}' mode={:o} ino={}",
+                            p.display(),
+                            meta.mode(),
+                            meta.ino()
+                        );
+
                         w.put_u32(NFS_OK);
                         w.put_opaque(&fh_from_path(&p));
                         put_fattr(&mut w, &meta);
                     } else {
+                        info!(peer, "nfs2: LOOKUP metadata failed path='{}'", p.display());
                         w.put_u32(NFSERR_NOENT);
                     }
                 } else {
+                    info!(
+                        peer,
+                        "nfs2: LOOKUP invalid dirfh fh_hex={}",
+                        hex::encode(&dirfh)
+                    );
                     w.put_u32(NFSERR_NOENT);
                 }
+
+                info!(peer, "nfs2: LOOKUP end");
 
                 rpc_accept_reply(call.xid, 0, &w.buf)
             }
