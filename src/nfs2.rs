@@ -3,6 +3,7 @@
 use crate::export::Exports;
 use crate::rpc::{decode_call, rpc_accept_reply, rpc_prog_mismatch_reply};
 use crate::xdr::{XdrR, XdrW};
+use hex;
 
 use std::{
     fs,
@@ -50,9 +51,7 @@ pub fn fh_from_path(path: &Path) -> Vec<u8> {
 }
 
 fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
-    if fh.len() < 16 {
-        return None;
-    }
+    info!("nfs2: path_from_fh fh_hex={}", hex::encode(fh));
 
     let ino =
         ((fh[8] as u64) << 24) | ((fh[9] as u64) << 16) | ((fh[10] as u64) << 8) | (fh[11] as u64);
@@ -161,6 +160,11 @@ impl Nfs2 {
                 let fh = r.get_opaque().unwrap_or_default();
                 let mut w = XdrW::new();
 
+                info!(
+                    "nfs2: GETATTR raw file handle fh_len={}, fh_hex={}",
+                    fh.len(),
+                    hex::encode(&fh)
+                );
                 if let Some(p) = path_from_fh(root, &fh) {
                     if let Ok(meta) = fs::metadata(&p) {
                         info!(
@@ -189,6 +193,11 @@ impl Nfs2 {
                 let name = r.get_string().unwrap_or_default();
                 let mut w = XdrW::new();
 
+                info!(
+                    "nfs2: GETATTR raw file handle fh_len={}, fh_hex={}",
+                    dirfh.len(),
+                    hex::encode(&dirfh)
+                );
                 if let Some(dir) = path_from_fh(root, &dirfh) {
                     let p = dir.join(name);
                     if let Ok(meta) = fs::metadata(&p) {
@@ -213,6 +222,11 @@ impl Nfs2 {
 
                 let mut w = XdrW::new();
 
+                info!(
+                    "nfs2: GETATTR raw file handle fh_len={}, fh_hex={}",
+                    fh.len(),
+                    hex::encode(&fh)
+                );
                 if let Some(dir) = path_from_fh(root, &fh) {
                     if let Ok(rd) = fs::read_dir(&dir) {
                         w.put_u32(NFS_OK);
