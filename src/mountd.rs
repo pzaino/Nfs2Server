@@ -61,7 +61,8 @@ impl Mountd {
 
                 if allowed {
                     w.put_u32(0); // OK
-                    let fh = crate::nfs2::fh_from_path(&path);
+                    let p = PathBuf::from(&path);
+                    let fh = crate::nfs2::fh_from_path(&p);
                     w.put_opaque(&fh);
                     w.put_u32(0); // auth flavors = empty
                 } else {
