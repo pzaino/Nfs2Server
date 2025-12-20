@@ -225,16 +225,13 @@ impl Nfs2 {
 
                 let mut w = XdrW::new();
 
-                info!(
-                    "nfs2: GETATTR raw file handle fh_len={}, fh_hex={}",
-                    fh.len(),
-                    hex::encode(&fh)
-                );
                 if let Some(dir) = path_from_fh(root, &fh) {
                     if let Ok(rd) = fs::read_dir(&dir) {
                         w.put_u32(NFS_OK);
 
                         let mut idx = 0u32;
+                        let mut sent_any = false;
+
                         for e in rd.flatten() {
                             if idx < cookie {
                                 idx += 1;
@@ -242,14 +239,19 @@ impl Nfs2 {
                             }
 
                             let name = e.file_name().to_string_lossy().into_owned();
-                            w.put_u32(1);
-                            w.put_u32(e.metadata().map(|m| m.ino() as u32).unwrap_or(0));
-                            w.put_string(&name);
-                            w.put_u32(idx + 1);
+                            let ino = e.metadata().map(|m| m.ino() as u32).unwrap_or(0);
+
+                            w.put_u32(1); // entry follows
+                            w.put_u32(ino); // fileid
+                            w.put_string(&name); // filename
+                            w.put_u32(idx + 1); // cookie
+
+                            sent_any = true;
                             idx += 1;
                         }
 
-                        w.put_u32(0);
+                        w.put_u32(0); // end of entry list
+                        w.put_u32(1); // EOF = TRUE  ← THIS WAS MISSING
                     } else {
                         w.put_u32(NFSERR_NOENT);
                     }
