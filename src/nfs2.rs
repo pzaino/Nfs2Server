@@ -5,6 +5,7 @@ use crate::mountd::MountTable;
 use crate::rpc::{decode_call, rpc_accept_reply, rpc_prog_mismatch_reply};
 use crate::xdr::{XdrR, XdrW};
 use hex;
+use tracing_subscriber::field::debug;
 
 use std::{
     fs,
@@ -251,6 +252,11 @@ impl Nfs2 {
 
                 let mut w = XdrW::new();
 
+                info!(
+                    "nfs2: READDIR raw file handle fh_len={}, fh_hex={}",
+                    fh.len(),
+                    hex::encode(&fh)
+                );
                 if let Some(dir) = path_from_fh(root, &fh) {
                     if let Ok(rd) = fs::read_dir(&dir) {
                         w.put_u32(NFS_OK);
@@ -293,6 +299,7 @@ impl Nfs2 {
 
                         w.put_u32(0); // end of entry list
                         w.put_u32(if eof { 1 } else { 0 }); // EOF flag
+                        info!("nfs2: READDIR reply size={}", w.buf.len());
                     } else {
                         w.put_u32(NFSERR_NOENT);
                     }
