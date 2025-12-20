@@ -474,9 +474,9 @@ impl Nfs2 {
                             return;
                         }
                     } else {
-                        // Not for us or failed decode, close.
-                        warn!(%peer, "nfs2 TCP: cannot handle call (decode/prog/vers mismatch?)");
-                        return;
+                        // IMPORTANT: do NOT close connection
+                        debug!(%peer, "nfs2 TCP: ignoring non-NFS RPC");
+                        continue;
                     }
                 }
             });
