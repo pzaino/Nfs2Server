@@ -1,5 +1,7 @@
 // src/nfs2.rs
 
+use crate::rpc;
+
 use crate::{
     export::Exports,
     rpc::{decode_call, rpc_accept_reply},
@@ -489,6 +491,27 @@ impl Nfs2 {
                     }
 
                     log_rpc_probe(&full, &peer);
+
+                    if let Some((call, _)) = decode_call(&full) {
+                        if call.prog == 100003 && call.vers != 2 {
+                            tracing::info!(
+                                %peer,
+                                vers = call.vers,
+                                "nfs2: rejecting unsupported NFS version"
+                            );
+
+                            let reply = rpc::rpc_prog_mismatch_reply(call.xid, 2, 2);
+
+                            let mut out = Vec::with_capacity(4 + reply.len());
+                            out.extend_from_slice(
+                                &(0x8000_0000u32 | reply.len() as u32).to_be_bytes(),
+                            );
+                            out.extend_from_slice(&reply);
+
+                            let _ = stream.write_all(&out).await;
+                            continue;
+                        }
+                    }
 
                     if let Some(reply) = this.handle_call(&full) {
                         let mut out = Vec::with_capacity(4 + reply.len());

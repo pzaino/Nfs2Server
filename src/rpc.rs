@@ -173,3 +173,17 @@ pub async fn rpcbind_unregister(program: u32, version: u32, proto: &str) -> Resu
     let _ = sock.send_to(&call, rpcbind_addr).await?;
     Ok(())
 }
+
+pub fn rpc_prog_mismatch_reply(xid: u32, low: u32, high: u32) -> Vec<u8> {
+    let mut w = XdrW::new();
+
+    w.put_u32(xid);
+    w.put_u32(MsgType::Reply as u32);
+    w.put_u32(1); // MSG_DENIED
+
+    w.put_u32(2); // RPC_PROG_MISMATCH
+    w.put_u32(low);
+    w.put_u32(high);
+
+    w.buf.to_vec()
+}
