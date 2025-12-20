@@ -77,6 +77,20 @@ fn load_exports(path: &str) -> Result<Exports> {
     Ok(Exports::new(exports))
 }
 
+async fn unregister_services() -> anyhow::Result<()> {
+    // mountd: versions 1,2,3 on both transports
+    for v in [1u32, 2u32, 3u32] {
+        rpc::rpcbind_unregister(100005, v, "udp").await?;
+        rpc::rpcbind_unregister(100005, v, "tcp").await?;
+    }
+
+    // nfs v2
+    rpc::rpcbind_unregister(100003, 2, "udp").await?;
+    rpc::rpcbind_unregister(100003, 2, "tcp").await?;
+
+    Ok(())
+}
+
 //
 // ---- main ----
 //
@@ -107,6 +121,11 @@ async fn main() -> Result<()> {
     let nfsd = nfs2::Nfs2::new(exports);
 
     const MOUNTD_PORT: u16 = 20048;
+
+    //
+    // ---- Unregister from rpcbind ----
+    //
+    unregister_services().await?;
 
     //
     // ---- Bind UDP sockets ----
@@ -158,5 +177,11 @@ async fn main() -> Result<()> {
     signal::ctrl_c().await?;
     info!("shutdown requested");
 
+    info!("unregistering RPC services");
+    if let Err(e) = unregister_services().await {
+        warn!(?e, "rpcbind unregister failed");
+    }
+
+    info!("shutdown complete");
     Ok(())
 }

@@ -150,3 +150,26 @@ async fn rpcbind_register(program: u32, version: u32, protocol: u32, port: u16) 
     sock.send_to(&call, rpcbind_addr).await?;
     Ok(())
 }
+
+pub async fn rpcbind_unregister(program: u32, version: u32, proto: &str) -> Result<()> {
+    let sock = UdpSocket::bind("0.0.0.0:0").await?;
+    let rpcbind_addr = "127.0.0.1:111";
+
+    let mut body = XdrW::new();
+    body.put_u32(program);
+    body.put_u32(version);
+    body.put_string(proto); // "udp" or "tcp"
+    body.put_string("");
+    body.put_string("");
+
+    let xid = rand::random::<u32>();
+
+    let call = build_rpc_call(
+        xid, 100000, // rpcbind
+        2, 2, // RPCBPROC_UNSET
+        &body.buf,
+    );
+
+    let _ = sock.send_to(&call, rpcbind_addr).await?;
+    Ok(())
+}
