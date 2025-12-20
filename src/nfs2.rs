@@ -6,7 +6,7 @@
 
 use crate::{
     export::Exports,
-    rpc::{decode_call, rpc_accept_reply},
+    rpc::{decode_call, rpc_accept_reply, rpc_prog_mismatch_reply},
     xdr::{XdrR, XdrW},
 };
 
@@ -158,7 +158,7 @@ impl Nfs2 {
                 vers = call.vers,
                 "nfs2: rejecting unsupported prog/version"
             );
-            return None;
+            return Some(rpc_prog_mismatch_reply(call.xid, 2, 2));
         }
 
         let mut r = XdrR::new(&buf[ofs..]);
