@@ -3,6 +3,7 @@
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
 use tokio::signal;
 use tracing::{debug, info, warn};
@@ -138,6 +139,16 @@ async fn main() -> Result<()> {
     let nfs_port = nfs_socket.local_addr()?.port();
     info!(nfs_port, "nfsd socket bound");
 
+    info!("binding TCP sockets");
+
+    let mountd_tcp = TcpListener::bind("0.0.0.0:0").await?;
+    let mountd_tcp_port = mountd_tcp.local_addr()?.port();
+    info!(mountd_tcp_port, "mountd TCP socket bound");
+
+    let nfs_tcp = TcpListener::bind("0.0.0.0:0").await?;
+    let nfs_tcp_port = nfs_tcp.local_addr()?.port();
+    info!(nfs_tcp_port, "nfsd TCP socket bound");
+
     //
     // ---- Register with rpcbind ----
     //
@@ -158,6 +169,22 @@ async fn main() -> Result<()> {
         version = 2,
         port = nfs_port,
         "nfsd registered with rpcbind"
+    );
+
+    rpc::rpcbind_register_tcp(100005, 1, mountd_tcp_port).await?;
+    info!(
+        program = 100005,
+        version = 1,
+        port = mountd_tcp_port,
+        "mountd TCP registered with rpcbind"
+    );
+
+    rpc::rpcbind_register_tcp(100003, 2, nfs_tcp_port).await?;
+    info!(
+        program = 100003,
+        version = 2,
+        port = nfs_tcp_port,
+        "nfsd TCP registered with rpcbind"
     );
 
     //

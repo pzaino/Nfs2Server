@@ -12,6 +12,7 @@ use tracing::{info, warn};
 // Mount v1 program 100005, version 1
 // Procedures: 0 NULL, 1 MNT, 2 DUMP, 3 UMNT, 4 UMNTALL, 5 EXPORT
 
+#[derive(Clone)]
 pub struct Mountd {
     exports: Exports,
 }
@@ -20,10 +21,98 @@ impl Mountd {
     pub fn new(exports: Exports) -> Self {
         Self { exports }
     }
-}
 
-impl Mountd {
-    // CHANGED: take ownership of an already-bound socket
+    /// Handle a single mountd RPC call.
+    /// Transport-independent: works for UDP and TCP.
+    pub fn handle_call(&self, buf: &[u8]) -> Option<Vec<u8>> {
+        let (call, ofs) = decode_call(buf)?;
+
+        if call.prog != 100005 || call.vers != 1 {
+            return None;
+        }
+
+        let mut r = XdrR::new(&buf[ofs..]);
+
+        let reply = match call.procid {
+            0 => {
+                // NULL
+                let w = XdrW::new();
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            1 => {
+                // MNT(path)
+                let path = r.get_string().unwrap_or_default();
+
+                let ok = self
+                    .exports
+                    .list()
+                    .iter()
+                    .any(|e| e.path == PathBuf::from(&path));
+
+                let mut w = XdrW::new();
+
+                if ok {
+                    w.put_u32(0); // status OK
+
+                    let fh = crate::nfs2::fh_from_path(&path);
+                    w.put_opaque(&fh);
+
+                    // auth flavors list (empty)
+                    w.put_u32(0);
+                } else {
+                    w.put_u32(13); // NFSERR_ACCES
+                }
+
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            3 => {
+                // UMNT(path)
+                let _ = r.get_string();
+                let w = XdrW::new();
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            5 => {
+                // EXPORT
+                let mut w = XdrW::new();
+                let exports = self.exports.list();
+
+                if exports.is_empty() {
+                    // exports pointer = NULL
+                    w.put_u32(0);
+                } else {
+                    // exports pointer = present
+                    w.put_u32(1);
+
+                    for ex in exports {
+                        // exportnode pointer = present
+                        w.put_u32(1);
+                        w.put_string(&ex.path.to_string_lossy());
+
+                        // groups list = NULL
+                        w.put_u32(0);
+                    }
+
+                    // end of exportnode list
+                    w.put_u32(0);
+                }
+
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            _ => {
+                // Unsupported procedure
+                let w = XdrW::new();
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+        };
+
+        Some(reply)
+    }
+
+    /// Run mountd over UDP
     pub async fn run(self, sock: UdpSocket, prog: u32, vers: u32) {
         let local = match sock.local_addr() {
             Ok(a) => a,
@@ -33,7 +122,7 @@ impl Mountd {
             }
         };
 
-        info!(%local, prog, vers, "mountd listening");
+        info!(%local, prog, vers, "mountd listening (UDP)");
 
         let mut buf = vec![0u8; 8192];
 
@@ -42,93 +131,7 @@ impl Mountd {
                 continue;
             };
 
-            if let Some((call, ofs)) = decode_call(&buf[..n]) {
-                if call.prog != prog || call.vers != vers {
-                    continue;
-                }
-
-                let mut r = XdrR::new(&buf[ofs..n]);
-
-                let reply = match call.procid {
-                    0 => {
-                        // NULL
-                        let w = XdrW::new();
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-
-                    1 => {
-                        // MNT(path)
-                        let path = r.get_string().unwrap_or_default();
-
-                        let ok = self
-                            .exports
-                            .list()
-                            .iter()
-                            .find(|e| e.path == PathBuf::from(&path));
-
-                        let mut w = XdrW::new();
-
-                        if ok.is_some() {
-                            w.put_u32(0); // status OK
-
-                            // filehandle 32 bytes
-                            let fh = super::nfs2::fh_from_path(&path);
-                            w.put_opaque(&fh);
-
-                            // auth flavors list (empty)
-                            w.put_u32(0);
-                        } else {
-                            w.put_u32(13); // PERMISSION
-                        }
-
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-
-                    3 => {
-                        // UMNT(path)
-                        let _ = r.get_string();
-                        let w = XdrW::new();
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-
-                    5 => {
-                        // EXPORT
-                        let mut w = XdrW::new();
-
-                        let exports = self.exports.list();
-
-                        if exports.is_empty() {
-                            // exports pointer = NULL
-                            w.put_u32(0);
-                        } else {
-                            // exports pointer = present
-                            w.put_u32(1);
-
-                            for ex in exports {
-                                // exportnode pointer = present
-                                w.put_u32(1);
-
-                                w.put_string(&ex.path.to_string_lossy());
-
-                                // groups list (pointer = NULL)
-                                w.put_u32(0);
-
-                                // next exportnode follows
-                            }
-
-                            // terminate exportnode list
-                            w.put_u32(0);
-                        }
-
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-
-                    _ => {
-                        let w = XdrW::new();
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-                };
-
+            if let Some(reply) = self.handle_call(&buf[..n]) {
                 let _ = sock.send_to(&reply, peer).await;
             }
         }
