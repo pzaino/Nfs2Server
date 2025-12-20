@@ -244,6 +244,12 @@ impl Nfs2 {
 
             // LOOKUP
             4 => {
+                info!(
+                    peer,
+                    vers = call.vers,
+                    auth = ?call.auth,
+                    "nfs2: LOOKUP entered"
+                );
                 let dirfh = r.get_opaque().unwrap_or_default();
                 let name = r.get_string().unwrap_or_default();
                 let mut w = XdrW::new();
