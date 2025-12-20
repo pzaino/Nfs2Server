@@ -42,6 +42,30 @@ impl Nfs2 {
     }
 }
 
+fn log_rpc_probe(buf: &[u8], peer: &std::net::SocketAddr) {
+    use crate::xdr::XdrR;
+
+    let mut r = XdrR::new(buf);
+
+    let xid = r.get_u32().ok();
+    let mtype = r.get_u32().ok();
+    let rpcvers = r.get_u32().ok();
+    let prog = r.get_u32().ok();
+    let vers = r.get_u32().ok();
+    let procid = r.get_u32().ok();
+
+    tracing::info!(
+        %peer,
+        xid = ?xid,
+        mtype = ?mtype,
+        rpcvers = ?rpcvers,
+        prog = ?prog,
+        vers = ?vers,
+        procid = ?procid,
+        "nfs2 TCP probe"
+    );
+}
+
 /// 32-byte-ish file handle encoding:
 /// [dev_hi u32 | dev_lo u32 | ino_hi u32 | ino_lo u32 | pad...]
 ///
@@ -463,6 +487,8 @@ impl Nfs2 {
                             return;
                         }
                     }
+
+                    log_rpc_probe(&full, &peer);
 
                     if let Some(reply) = this.handle_call(&full) {
                         let mut out = Vec::with_capacity(4 + reply.len());
