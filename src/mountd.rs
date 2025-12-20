@@ -57,8 +57,17 @@ impl Mountd {
 
                 if allowed {
                     w.put_u32(0); // OK
+
                     let p = PathBuf::from(&path);
                     let fh = crate::nfs2::fh_from_path(&p);
+
+                    info!(
+                        "mountd: issuing FH for path={} len={} hex={}",
+                        p.display(),
+                        fh.len(),
+                        hex::encode(&fh)
+                    );
+
                     w.put_opaque(&fh);
                     w.put_u32(0); // auth flavors = empty
                 } else {
