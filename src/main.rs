@@ -1,8 +1,10 @@
 // src/main.rs
 
 use anyhow::Result;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::signal;
 use tracing::{debug, info, warn};
@@ -114,11 +116,12 @@ async fn main() -> Result<()> {
     }
 
     //
-    // ---- Initialise services ----
+    // ---- Allocate mount table ----
     //
+    let mount_table: mountd::MountTable = Arc::new(Mutex::new(HashMap::new()));
 
-    let mountd = mountd::Mountd::new(exports.clone());
-    let nfsd = nfs2::Nfs2::new(exports);
+    let mountd = mountd::Mountd::new(exports.clone(), mount_table.clone());
+    let nfsd = nfs2::Nfs2::new(exports, mount_table.clone());
 
     const MOUNTD_PORT: u16 = 20048;
 

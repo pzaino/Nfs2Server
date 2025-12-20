@@ -10,6 +10,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{info, warn};
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+pub type MountTable = Arc<Mutex<HashMap<String, Vec<u8>>>>;
+
 // Mount v1
 const MOUNT_PROG: u32 = 100005;
 const MOUNT_VERS: u32 = 1;
@@ -17,11 +22,12 @@ const MOUNT_VERS: u32 = 1;
 #[derive(Clone)]
 pub struct Mountd {
     exports: Exports,
+    mounts: MountTable,
 }
 
 impl Mountd {
-    pub fn new(exports: Exports) -> Self {
-        Self { exports }
+    pub fn new(exports: Exports, mounts: MountTable) -> Self {
+        Self { exports, mounts }
     }
 
     /// Core mountd RPC handler (UDP + TCP)
@@ -67,6 +73,10 @@ impl Mountd {
                         fh.len(),
                         hex::encode(&fh)
                     );
+
+                    let fh = crate::nfs2::fh_from_path(&p);
+
+                    self.mounts.lock().unwrap().insert(path.clone(), fh.clone());
 
                     w.put_opaque(&fh);
                     w.put_u32(0); // auth flavors = empty

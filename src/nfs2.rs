@@ -1,6 +1,7 @@
 // src/nfs2.rs
 
 use crate::export::Exports;
+use crate::mountd::MountTable;
 use crate::rpc::{decode_call, rpc_accept_reply, rpc_prog_mismatch_reply};
 use crate::xdr::{XdrR, XdrW};
 use hex;
@@ -23,19 +24,7 @@ const NFS_VERS: u32 = 2;
 const NFS_OK: u32 = 0;
 const NFSERR_NOENT: u32 = 2;
 const NFSERR_ACCES: u32 = 13;
-
-#[derive(Clone)]
-pub struct Nfs2 {
-    exports: Exports,
-    root_fh: Vec<u8>,
-}
-
-pub fn new(exports: Exports) -> Self {
-    let root = Path::new("/tmp");
-    let root_fh = fh_from_path(root);
-
-    Self { exports, root_fh }
-}
+const NFSERR_STALE: u32 = 70;
 
 // ------------------------------------------------------------
 // File handle helpers
@@ -92,6 +81,12 @@ fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
     walk(root, ino)
 }
 
+fn nfs_err(errcode: u32) -> Vec<u8> {
+    let mut w = XdrW::new();
+    w.put_u32(errcode);
+    w.buf.to_vec()
+}
+
 // ------------------------------------------------------------
 // XDR helpers
 // ------------------------------------------------------------
@@ -131,11 +126,12 @@ fn put_fattr(w: &mut XdrW, meta: &fs::Metadata) {
 #[derive(Clone)]
 pub struct Nfs2 {
     exports: Exports,
+    mounts: MountTable,
 }
 
 impl Nfs2 {
-    pub fn new(exports: Exports) -> Self {
-        Self { exports }
+    pub fn new(exports: Exports, mounts: MountTable) -> Self {
+        Self { exports, mounts }
     }
 
     // --------------------------------------------------------
@@ -174,8 +170,13 @@ impl Nfs2 {
             // GETATTR
             1 => {
                 let mut fh = r.get_opaque().unwrap_or_default();
+
                 if fh.is_empty() {
-                    fh = self.root_fh.clone();
+                    if let Some((_, root_fh)) = self.mounts.lock().unwrap().iter().next() {
+                        fh = root_fh.clone();
+                    } else {
+                        return Some(nfs_err(NFSERR_STALE));
+                    }
                 }
                 let mut w = XdrW::new();
 
@@ -236,8 +237,13 @@ impl Nfs2 {
             // READDIR
             16 => {
                 let mut fh = r.get_opaque().unwrap_or_default();
+
                 if fh.is_empty() {
-                    fh = self.root_fh.clone();
+                    if let Some((_, root_fh)) = self.mounts.lock().unwrap().iter().next() {
+                        fh = root_fh.clone();
+                    } else {
+                        return Some(nfs_err(NFSERR_STALE));
+                    }
                 }
                 let cookie = r.get_u32().unwrap_or(0);
                 let _count = r.get_u32().unwrap_or(0);
