@@ -129,7 +129,7 @@ impl Nfs2 {
         }
 
         // NOTE: unchanged semantics (still hardcoded for now)
-        let export_root = PathBuf::from("/tmp/nfs_export");
+        let export_root = self.exports.list().first()?.path.clone();
 
         let mut r = XdrR::new(&buf[ofs..]);
 
