@@ -95,16 +95,30 @@ impl Mountd {
                         // EXPORT
                         let mut w = XdrW::new();
 
-                        for ex in self.exports.list() {
-                            w.put_u32(1); // more exports follow (TRUE)
-                            w.put_string(&ex.path.to_string_lossy());
+                        let exports = self.exports.list();
 
-                            // groups list (empty)
-                            w.put_u32(0); // no groups
+                        if exports.is_empty() {
+                            // exports pointer = NULL
+                            w.put_u32(0);
+                        } else {
+                            // exports pointer = present
+                            w.put_u32(1);
+
+                            for ex in exports {
+                                // exportnode pointer = present
+                                w.put_u32(1);
+
+                                w.put_string(&ex.path.to_string_lossy());
+
+                                // groups list (pointer = NULL)
+                                w.put_u32(0);
+
+                                // next exportnode follows
+                            }
+
+                            // terminate exportnode list
+                            w.put_u32(0);
                         }
-
-                        // terminate export list
-                        w.put_u32(0); // no more exports (FALSE)
 
                         rpc_accept_reply(call.xid, 0, &w.buf)
                     }
