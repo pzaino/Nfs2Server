@@ -92,33 +92,67 @@ fn nfs_err(errcode: u32) -> Vec<u8> {
 // XDR helpers
 // ------------------------------------------------------------
 
-fn put_fattr(w: &mut XdrW, meta: &fs::Metadata) {
-    let ftype = if meta.is_dir() { 2 } else { 1 };
+fn put_fattr(w: &mut XdrW, meta: &std::fs::Metadata, path: &Path) {
+    use std::os::unix::fs::MetadataExt;
 
-    let blocks = (meta.len() + 511) / 512;
+    let is_dir = meta.is_dir();
 
-    w.put_u32(ftype); // type
-    w.put_u32(meta.mode()); // mode
-    w.put_u32(meta.nlink() as u32); // nlink
-    w.put_u32(meta.uid()); // uid
-    w.put_u32(meta.gid()); // gid
-    w.put_u32(meta.len() as u32); // size
-    w.put_u32(4096); // blocksize
-    w.put_u32(0); // rdev
-    w.put_u32(blocks as u32); // blocks
-    w.put_u32(0); // fsid
-    w.put_u32(meta.ino() as u32); // fileid
+    // --- ftype ---
+    let ftype = if is_dir { 2 } else { 1 }; // NFDIR = 2, NFREG = 1
+    w.put_u32(ftype);
 
-    // atime
-    w.put_u32(meta.atime() as u32);
+    // --- mode ---
+    let mut mode = meta.mode() & 0o777;
+    if is_dir {
+        mode |= 0o040000;
+    } else {
+        mode |= 0o100000;
+    }
+    w.put_u32(mode);
+
+    // --- nlink ---
+    let nlink = if is_dir { 2 } else { meta.nlink() as u32 };
+    w.put_u32(nlink);
+
+    // --- uid / gid ---
+    w.put_u32(meta.uid());
+    w.put_u32(meta.gid());
+
+    // --- size ---
+    let size = if is_dir { 512 } else { meta.len() as u32 };
+    w.put_u32(size);
+
+    // --- blocksize ---
+    w.put_u32(512);
+
+    // --- rdev ---
     w.put_u32(0);
 
-    // mtime
-    w.put_u32(meta.mtime() as u32);
-    w.put_u32(0);
+    // --- blocks ---
+    let blocks = if is_dir {
+        1
+    } else {
+        ((meta.len() + 511) / 512) as u32
+    };
+    w.put_u32(blocks);
 
-    // ctime
-    w.put_u32(meta.ctime() as u32);
+    // --- fsid ---
+    w.put_u32(1);
+
+    // --- fileid (DO NOT USE inode) ---
+    let fileid = crc32fast::hash(path.to_string_lossy().as_bytes());
+    w.put_u32(fileid);
+
+    // --- times ---
+    let atime = meta.atime() as u32;
+    let mtime = meta.mtime() as u32;
+    let ctime = meta.ctime() as u32;
+
+    w.put_u32(atime);
+    w.put_u32(0);
+    w.put_u32(mtime);
+    w.put_u32(0);
+    w.put_u32(ctime);
     w.put_u32(0);
 }
 
@@ -197,7 +231,7 @@ impl Nfs2 {
                             "nfs2: GETATTR metadata"
                         );
                         w.put_u32(NFS_OK);
-                        put_fattr(&mut w, &meta);
+                        put_fattr(&mut w, &meta, &p);
                     } else {
                         w.put_u32(NFSERR_NOENT);
                     }
@@ -243,7 +277,7 @@ impl Nfs2 {
 
                         w.put_u32(NFS_OK);
                         w.put_opaque(&fh_from_path(&p));
-                        put_fattr(&mut w, &meta);
+                        put_fattr(&mut w, &meta, &p);
                     } else {
                         info!(peer, "nfs2: LOOKUP metadata failed path='{}'", p.display());
                         w.put_u32(NFSERR_NOENT);
