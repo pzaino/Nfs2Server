@@ -96,10 +96,15 @@ impl Mountd {
                         let mut w = XdrW::new();
 
                         for ex in self.exports.list() {
+                            w.put_u32(1); // more exports follow (TRUE)
                             w.put_string(&ex.path.to_string_lossy());
-                            // groups list is empty
-                            w.put_u32(0);
+
+                            // groups list (empty)
+                            w.put_u32(0); // no groups
                         }
+
+                        // terminate export list
+                        w.put_u32(0); // no more exports (FALSE)
 
                         rpc_accept_reply(call.xid, 0, &w.buf)
                     }
