@@ -299,14 +299,19 @@ impl Nfs2 {
 
                         w.put_u32(0); // end of entry list
                         w.put_u32(if eof { 1 } else { 0 }); // EOF flag
-                        info!("nfs2: READDIR reply size={}", w.buf.len());
                     } else {
                         w.put_u32(NFSERR_NOENT);
                     }
                 } else {
                     w.put_u32(NFSERR_STALE);
                 }
-
+                info!(
+                    peer,
+                    cookie,
+                    count,
+                    reply_size = w.buf.len(),
+                    "nfs2: READDIR reply"
+                );
                 rpc_accept_reply(call.xid, 0, &w.buf)
             }
 
