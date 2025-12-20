@@ -1,6 +1,6 @@
 // src/rpc.rs
 
-use crate::xdr::{XdrCodec, XdrR, XdrW};
+use crate::xdr::{XdrR, XdrW};
 use anyhow::Result;
 use tokio::net::UdpSocket;
 use tracing::debug;
@@ -47,15 +47,15 @@ pub fn decode_call(pkt: &[u8]) -> Option<(RpcCall, usize)> {
     let vers = r.get_u32().ok()?;
     let procid = r.get_u32().ok()?;
 
-    // credentials
+    // cred: (flavor, length, bytes[length], pad)
     let _cred_flavor = r.get_u32().ok()?;
-    let _cred_len = r.get_u32().ok()?;
-    let _ = r.get_opaque().ok()?;
+    let cred_len = r.get_u32().ok()? as usize;
+    r.skip_bytes(cred_len).ok()?;
 
-    // verifier
+    // verf: (flavor, length, bytes[length], pad)
     let _verf_flavor = r.get_u32().ok()?;
-    let _verf_len = r.get_u32().ok()?;
-    let _ = r.get_opaque().ok()?;
+    let verf_len = r.get_u32().ok()? as usize;
+    r.skip_bytes(verf_len).ok()?;
 
     Some((
         RpcCall {

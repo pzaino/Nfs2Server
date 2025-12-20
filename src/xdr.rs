@@ -50,6 +50,16 @@ impl<'a> XdrR<'a> {
     }
 }
 
+impl<'a> XdrR<'a> {
+    pub fn skip_bytes(&mut self, len: usize) -> Result<(), XdrError> {
+        let pad = (4 - (len % 4)) % 4;
+        self.need(len + pad)?;
+        self.pos += len + pad;
+        Ok(())
+    }
+}
+
+/*
 pub trait XdrCodec {
     fn put_u32(&mut self, v: u32);
     fn put_i32(&mut self, v: i32);
@@ -76,6 +86,8 @@ impl XdrCodec for XdrW {
         self.put_opaque(s.as_bytes());
     }
 }
+
+*/
 
 impl<'a> XdrR<'a> {
     fn need(&self, n: usize) -> Result<(), XdrError> {
