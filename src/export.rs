@@ -2,6 +2,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct Export {
     pub path: PathBuf,
@@ -21,6 +22,7 @@ impl Exports {
     pub fn list(&self) -> &[Export] {
         &self.0
     }
+    #[allow(dead_code)]
     pub fn by_path(&self, p: &str) -> Option<Export> {
         self.0
             .iter()

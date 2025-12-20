@@ -32,7 +32,7 @@ impl Mountd {
             return None;
         }
         // accept v1..v3
-        if call.vers < 1 || call.vers > 3 {
+        if call.vers < MOUNT_VERS || call.vers > 3 {
             return None;
         }
 
@@ -51,11 +51,7 @@ impl Mountd {
                 let path = r.get_string().unwrap_or_default();
                 info!(path = %path, "mountd: MNT");
 
-                let allowed = self
-                    .exports
-                    .list()
-                    .iter()
-                    .any(|e| e.path == PathBuf::from(&path));
+                let allowed = self.exports.list().iter().any(|e| e.path == path); // PathBuf::from(&path));
 
                 let mut w = XdrW::new();
 
@@ -126,10 +122,10 @@ impl Mountd {
 
             info!(%peer, size = n, "mountd UDP request");
 
-            if let Some(reply) = self.handle_call(&buf[..n]) {
-                if let Err(e) = sock.send_to(&reply, peer).await {
-                    warn!(?e, %peer, "mountd UDP send failed");
-                }
+            if let Some(reply) = self.handle_call(&buf[..n])
+                && let Err(e) = sock.send_to(&reply, peer).await
+            {
+                warn!(?e, %peer, "mountd UDP send failed");
             }
         }
     }

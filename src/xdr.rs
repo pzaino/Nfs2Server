@@ -1,8 +1,9 @@
 // src/xdr.rs
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use thiserror::Error;
 
+#[allow(dead_code)]
 #[derive(Error, Debug)]
 pub enum XdrError {
     #[error("buffer underrun")]
@@ -24,8 +25,9 @@ impl XdrW {
     pub fn put_u32(&mut self, v: u32) {
         self.buf.put_u32(v);
     }
+    #[allow(dead_code)]
     pub fn put_i32(&mut self, v: i32) {
-        self.buf.put_i32(v as i32);
+        self.buf.put_i32(v);
     }
     pub fn put_opaque(&mut self, data: &[u8]) {
         self.buf.put_u32(data.len() as u32);
@@ -103,6 +105,7 @@ impl<'a> XdrR<'a> {
         self.pos += 4;
         Ok(v)
     }
+    #[allow(dead_code)]
     pub fn get_i32(&mut self) -> Result<i32, XdrError> {
         Ok(self.get_u32()? as i32)
     }
