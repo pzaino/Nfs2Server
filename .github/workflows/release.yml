@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (example: v1.4.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Check VERSION vs tag
+        run: |
+          VERSION=$(cat VERSION)
+          TAG="${{ inputs.tag }}"
+
+          if echo "$VERSION" | grep -q -- "-dev$"; then
+            echo "ERROR: Cannot release a -dev version"
+            exit 1
+          fi
+
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "ERROR: Tag does not match VERSION"
+            echo "VERSION=$VERSION TAG=$TAG"
+            exit 1
+          fi
+
+  build-linux-windows:
+    name: Build Linux and Windows
+    runs-on: ubuntu-latest
+    needs: validate
+    strategy:
+      matrix:
+        target:
+        - x86_64-unknown-linux-musl
+        - aarch64-unknown-linux-musl
+        - i686-pc-windows-gnu
+        - x86_64-pc-windows-gnu
+        - aarch64-pc-windows-gnu
+    steps:
+    - uses: actions/checkout@v4
+      with:
+            ref: ${{ inputs.tag }}
+
+    - name: Build
+      run: |
+            docker build \
+                --build-arg TARGET=${{ matrix.target }} \
+                -f ci/Dockerfile.build \
+                -t rust-builder .
+
+            docker run --rm \
+                -v $PWD/dist:/out \
+                rust-builder
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-13
+    needs: validate
+    strategy:
+      matrix:
+        target:
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.76.0
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/* dist/
+
+  publish:
+    name: Publish release artifacts
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux-windows
+      - build-macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+
+      - name: Upload release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: |
+            dist/*

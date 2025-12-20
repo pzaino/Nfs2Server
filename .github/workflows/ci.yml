@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-version:
+    name: Validate VERSION state
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure VERSION is open on main
+        run: |
+          if ! grep -q -- "-dev$" VERSION; then
+            echo "ERROR: VERSION must end with -dev on main"
+            exit 1
+          fi
+
+  lint-test:
+    name: Lint, build, test
+    runs-on: ubuntu-latest
+    needs: validate-version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.76.0
+          components: rustfmt, clippy
+
+      - name: Formatting
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Tests
+        run: cargo test --locked
+
+  security:
+    name: Dependency and license audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install audit tools
+        run: |
+          cargo install cargo-audit
+          cargo install cargo-deny
+
+      - name: Cargo audit
+        run: cargo audit
+
+      - name: Cargo deny
+        run: cargo deny check
