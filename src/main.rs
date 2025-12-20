@@ -136,6 +136,12 @@ async fn main() -> Result<()> {
     rpc::rpcbind_register_tcp(100005, 1, mountd_tcp_port).await?;
     rpc::rpcbind_register_tcp(100003, 2, nfs_tcp_port).await?;
 
+    // mountd versions commonly queried by clients
+    for v in [1u32, 2u32, 3u32] {
+        rpc::rpcbind_register_udp(100005, v, mountd_udp_port).await?;
+        rpc::rpcbind_register_tcp(100005, v, mountd_tcp_port).await?;
+    }
+
     //
     // ---- Start servers ----
     //

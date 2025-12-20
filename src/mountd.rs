@@ -28,7 +28,11 @@ impl Mountd {
     pub fn handle_call(&self, buf: &[u8]) -> Option<Vec<u8>> {
         let (call, ofs) = decode_call(buf)?;
 
-        if call.prog != MOUNT_PROG || call.vers != MOUNT_VERS {
+        if call.prog != MOUNT_PROG {
+            return None;
+        }
+        // accept v1..v3
+        if call.vers < 1 || call.vers > 3 {
             return None;
         }
 
