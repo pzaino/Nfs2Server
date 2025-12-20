@@ -163,6 +163,14 @@ impl Nfs2 {
 
                 if let Some(p) = path_from_fh(root, &fh) {
                     if let Ok(meta) = fs::metadata(&p) {
+                        info!(
+                            peer,
+                            path = %p.display(),
+                            size = meta.len(),
+                            ino = meta.ino(),
+                            mode = format_args!("{:o}", meta.permissions().mode()),
+                            "nfs2: GETATTR metadata"
+                        );
                         w.put_u32(NFS_OK);
                         put_fattr(&mut w, &meta);
                     } else {
