@@ -2,6 +2,7 @@
 
 use crate::xdr::{XdrR, XdrW};
 use anyhow::Result;
+//use serde::de;
 use tokio::net::UdpSocket;
 use tracing::debug;
 
@@ -19,12 +20,28 @@ pub enum MsgType {
     Reply = 1,
 }
 
-#[derive(Debug)]
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct RpcAuthUnix {
+    pub uid: u32,
+    pub gid: u32,
+    pub aux_gids: Vec<u32>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub enum RpcAuth {
+    Null,
+    Unix(RpcAuthUnix),
+}
+
+#[derive(Debug, Clone)]
 pub struct RpcCall {
     pub xid: u32,
     pub prog: u32,
     pub vers: u32,
     pub procid: u32,
+    pub auth: RpcAuth,
 }
 
 /// Decode an ONC RPC CALL message.
@@ -63,6 +80,7 @@ pub fn decode_call(pkt: &[u8]) -> Option<(RpcCall, usize)> {
             prog,
             vers,
             procid,
+            auth: RpcAuth::Null,
         },
         r.pos,
     ))

@@ -201,6 +201,11 @@ impl Nfs2 {
     /// Transport-independent NFSv2 handler.
     pub fn handle_call(&self, buf: &[u8]) -> Option<Vec<u8>> {
         let (call, ofs) = decode_call(buf)?;
+        #[allow(unused_variables)]
+        let uid = match &call.auth {
+            rpc::RpcAuth::Unix(a) => a.uid,
+            _ => 65534,
+        };
 
         if call.prog != NFS_PROG || call.vers != NFS_VERS {
             return None;
