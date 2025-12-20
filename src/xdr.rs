@@ -20,6 +20,24 @@ impl XdrW {
             buf: BytesMut::new(),
         }
     }
+
+    pub fn put_u32(&mut self, v: u32) {
+        self.buf.put_u32(v);
+    }
+    pub fn put_i32(&mut self, v: i32) {
+        self.buf.put_i32(v as i32);
+    }
+    pub fn put_opaque(&mut self, data: &[u8]) {
+        self.buf.put_u32(data.len() as u32);
+        self.buf.extend_from_slice(data);
+        let pad = (4 - (data.len() % 4)) % 4;
+        if pad > 0 {
+            self.buf.extend_from_slice(&[0; 3][..pad]);
+        }
+    }
+    pub fn put_string(&mut self, s: &str) {
+        self.put_opaque(s.as_bytes());
+    }
 }
 
 pub struct XdrR<'a> {
@@ -78,12 +96,12 @@ impl<'a> XdrR<'a> {
     }
     pub fn get_opaque(&mut self) -> Result<Vec<u8>, XdrError> {
         let len = self.get_u32()? as usize;
-        self.need(len)?;
-        let data = self.buf[self.pos..self.pos + len].to_vec();
-        self.pos += len;
         let pad = (4 - (len % 4)) % 4;
-        self.need(pad)?;
-        self.pos += pad;
+        self.need(len + pad)?;
+
+        let data = self.buf[self.pos..self.pos + len].to_vec();
+        self.pos += len + pad;
+
         Ok(data)
     }
     pub fn get_string(&mut self) -> Result<String, XdrError> {

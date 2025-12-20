@@ -3,8 +3,7 @@
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tokio::net::TcpListener;
-use tokio::net::UdpSocket;
+use tokio::net::{TcpListener, UdpSocket};
 use tokio::signal;
 use tracing::{debug, info, warn};
 
@@ -54,7 +53,7 @@ fn load_exports(path: &str) -> Result<Exports> {
     debug!(path, "checking exports file");
 
     if !Path::new(path).exists() {
-        debug!(path, "exports file not found");
+        warn!(path, "exports file not found");
         return Ok(Exports::new(Vec::new()));
     }
 
@@ -73,13 +72,7 @@ fn load_exports(path: &str) -> Result<Exports> {
             anon_gid: e.anon_gid,
             clients: e.clients,
         })
-        .collect::<Vec<_>>();
-
-    debug!(
-        count = exports.len(),
-        exports = ?exports,
-        "exports parsed successfully"
-    );
+        .collect();
 
     Ok(Exports::new(exports))
 }
@@ -100,120 +93,62 @@ async fn main() -> Result<()> {
     // ---- Load exports ----
     //
 
-    let exports_path = "./exports.toml";
-    info!(path = exports_path, "loading exports");
-
-    let exports = load_exports(exports_path)?;
+    let exports = load_exports("./exports.toml")?;
 
     if exports.list().is_empty() {
-        warn!("no exports configured (file missing or empty)");
-    } else {
-        info!(
-            count = exports.list().len(),
-            path = exports_path,
-            "exports loaded"
-        );
+        warn!("no exports configured");
     }
 
     //
     // ---- Initialise services ----
     //
 
-    debug!("initialising mountd");
     let mountd = mountd::Mountd::new(exports.clone());
-
-    debug!("initialising nfsd");
     let nfsd = nfs2::Nfs2::new(exports);
 
     //
-    // ---- Bind sockets explicitly ----
+    // ---- Bind UDP sockets ----
     //
 
-    info!("binding UDP sockets");
+    let mountd_udp = UdpSocket::bind("0.0.0.0:0").await?;
+    let mountd_udp_port = mountd_udp.local_addr()?.port();
 
-    let mountd_socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let mountd_port = mountd_socket.local_addr()?.port();
-    info!(mountd_port, "mountd socket bound");
+    let nfs_udp = UdpSocket::bind("0.0.0.0:0").await?;
+    let nfs_udp_port = nfs_udp.local_addr()?.port();
 
-    let nfs_socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let nfs_port = nfs_socket.local_addr()?.port();
-    info!(nfs_port, "nfsd socket bound");
-
-    info!("binding TCP sockets");
+    //
+    // ---- Bind TCP sockets ----
+    //
 
     let mountd_tcp = TcpListener::bind("0.0.0.0:0").await?;
     let mountd_tcp_port = mountd_tcp.local_addr()?.port();
-    info!(mountd_tcp_port, "mountd TCP socket bound");
 
     let nfs_tcp = TcpListener::bind("0.0.0.0:0").await?;
     let nfs_tcp_port = nfs_tcp.local_addr()?.port();
-    info!(nfs_tcp_port, "nfsd TCP socket bound");
 
     //
     // ---- Register with rpcbind ----
     //
 
-    info!("registering services with rpcbind");
-
-    rpc::rpcbind_register_udp(100005, 1, mountd_port).await?;
-    info!(
-        program = 100005,
-        version = 1,
-        port = mountd_port,
-        "mountd registered with rpcbind"
-    );
-
-    rpc::rpcbind_register_udp(100003, 2, nfs_port).await?;
-    info!(
-        program = 100003,
-        version = 2,
-        port = nfs_port,
-        "nfsd registered with rpcbind"
-    );
+    rpc::rpcbind_register_udp(100005, 1, mountd_udp_port).await?;
+    rpc::rpcbind_register_udp(100003, 2, nfs_udp_port).await?;
 
     rpc::rpcbind_register_tcp(100005, 1, mountd_tcp_port).await?;
-    info!(
-        program = 100005,
-        version = 1,
-        port = mountd_tcp_port,
-        "mountd TCP registered with rpcbind"
-    );
-
     rpc::rpcbind_register_tcp(100003, 2, nfs_tcp_port).await?;
-    info!(
-        program = 100003,
-        version = 2,
-        port = nfs_tcp_port,
-        "nfsd TCP registered with rpcbind"
-    );
 
     //
     // ---- Start servers ----
     //
 
-    info!("starting service tasks");
+    tokio::spawn(mountd.clone().run_udp(mountd_udp));
+    tokio::spawn(mountd.run_tcp(mountd_tcp));
 
-    tokio::spawn(async move {
-        info!("mountd task started");
-        mountd.run(mountd_socket, 100005, 1).await;
-        warn!("mountd task exited");
-    });
+    tokio::spawn(nfsd.clone().run_udp(nfs_udp));
+    tokio::spawn(nfsd.run_tcp(nfs_tcp));
 
-    tokio::spawn(async move {
-        info!("nfsd task started");
-        nfsd.run(nfs_socket, 100003, 2).await;
-        warn!("nfsd task exited");
-    });
-
-    info!("nfs2-rs started successfully");
-    info!("waiting for Ctrl+C");
-
-    //
-    // ---- Shutdown ----
-    //
-
+    info!("nfs2-rs started");
     signal::ctrl_c().await?;
-    info!("shutdown signal received");
+    info!("shutdown requested");
 
     Ok(())
 }

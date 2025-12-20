@@ -3,14 +3,16 @@
 use crate::{
     export::Exports,
     rpc::{decode_call, rpc_accept_reply},
-    xdr::{XdrCodec, XdrR, XdrW},
+    xdr::{XdrR, XdrW},
 };
 use std::path::PathBuf;
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, UdpSocket};
 use tracing::{info, warn};
 
-// Mount v1 program 100005, version 1
-// Procedures: 0 NULL, 1 MNT, 2 DUMP, 3 UMNT, 4 UMNTALL, 5 EXPORT
+// Mount v1
+const MOUNT_PROG: u32 = 100005;
+const MOUNT_VERS: u32 = 1;
 
 #[derive(Clone)]
 pub struct Mountd {
@@ -22,12 +24,11 @@ impl Mountd {
         Self { exports }
     }
 
-    /// Handle a single mountd RPC call.
-    /// Transport-independent: works for UDP and TCP.
+    /// Core mountd RPC handler (UDP + TCP)
     pub fn handle_call(&self, buf: &[u8]) -> Option<Vec<u8>> {
         let (call, ofs) = decode_call(buf)?;
 
-        if call.prog != 100005 || call.vers != 1 {
+        if call.prog != MOUNT_PROG || call.vers != MOUNT_VERS {
             return None;
         }
 
@@ -36,15 +37,17 @@ impl Mountd {
         let reply = match call.procid {
             0 => {
                 // NULL
+                info!("mountd: NULL");
                 let w = XdrW::new();
                 rpc_accept_reply(call.xid, 0, &w.buf)
             }
 
             1 => {
-                // MNT(path)
+                // MNT
                 let path = r.get_string().unwrap_or_default();
+                info!(path = %path, "mountd: MNT");
 
-                let ok = self
+                let allowed = self
                     .exports
                     .list()
                     .iter()
@@ -52,14 +55,11 @@ impl Mountd {
 
                 let mut w = XdrW::new();
 
-                if ok {
-                    w.put_u32(0); // status OK
-
+                if allowed {
+                    w.put_u32(0); // OK
                     let fh = crate::nfs2::fh_from_path(&path);
                     w.put_opaque(&fh);
-
-                    // auth flavors list (empty)
-                    w.put_u32(0);
+                    w.put_u32(0); // auth flavors = empty
                 } else {
                     w.put_u32(13); // NFSERR_ACCES
                 }
@@ -68,42 +68,37 @@ impl Mountd {
             }
 
             3 => {
-                // UMNT(path)
+                // UMNT
                 let _ = r.get_string();
+                info!("mountd: UMNT");
                 let w = XdrW::new();
                 rpc_accept_reply(call.xid, 0, &w.buf)
             }
 
             5 => {
                 // EXPORT
+                info!("mountd: EXPORT");
+
                 let mut w = XdrW::new();
+
                 let exports = self.exports.list();
 
-                if exports.is_empty() {
-                    // exports pointer = NULL
-                    w.put_u32(0);
-                } else {
-                    // exports pointer = present
-                    w.put_u32(1);
+                // export list (linked list)
+                for ex in exports {
+                    w.put_u32(1); // exportnode present
+                    w.put_string(&ex.path.to_string_lossy());
 
-                    for ex in exports {
-                        // exportnode pointer = present
-                        w.put_u32(1);
-                        w.put_string(&ex.path.to_string_lossy());
-
-                        // groups list = NULL
-                        w.put_u32(0);
-                    }
-
-                    // end of exportnode list
+                    // groups list (empty)
                     w.put_u32(0);
                 }
+
+                w.put_u32(0); // end of export list
 
                 rpc_accept_reply(call.xid, 0, &w.buf)
             }
 
-            _ => {
-                // Unsupported procedure
+            p => {
+                warn!(procid = p, "mountd: unsupported proc");
                 let w = XdrW::new();
                 rpc_accept_reply(call.xid, 0, &w.buf)
             }
@@ -112,18 +107,10 @@ impl Mountd {
         Some(reply)
     }
 
-    /// Run mountd over UDP
-    /// Run mountd over UDP
-    pub async fn run(self, sock: UdpSocket, prog: u32, vers: u32) {
-        let local = match sock.local_addr() {
-            Ok(a) => a,
-            Err(e) => {
-                warn!(?e, "mountd failed to get local addr");
-                return;
-            }
-        };
-
-        info!(%local, prog, vers, "mountd listening (UDP)");
+    /// UDP server
+    pub async fn run_udp(self, sock: UdpSocket) {
+        let local = sock.local_addr().ok();
+        info!(?local, "mountd listening (UDP)");
 
         let mut buf = vec![0u8; 8192];
 
@@ -132,123 +119,64 @@ impl Mountd {
                 continue;
             };
 
-            info!(
-                peer = %peer,
-                size = n,
-                "mountd received UDP packet"
-            );
+            info!(%peer, size = n, "mountd UDP request");
 
-            match decode_call(&buf[..n]) {
-                None => {
-                    warn!(
-                        peer = %peer,
-                        "mountd: decode_call failed"
-                    );
-                    continue;
-                }
-                Some((call, ofs)) => {
-                    info!(
-                        peer = %peer,
-                        xid = call.xid,
-                        prog = call.prog,
-                        vers = call.vers,
-                        procid = call.procid,
-                        "mountd: RPC call decoded"
-                    );
-
-                    if call.prog != prog || call.vers != vers {
-                        warn!(
-                            peer = %peer,
-                            prog = call.prog,
-                            vers = call.vers,
-                            "mountd: program/version mismatch"
-                        );
-                        continue;
-                    }
-
-                    let mut r = XdrR::new(&buf[ofs..n]);
-
-                    let reply = match call.procid {
-                        0 => {
-                            info!("mountd: NULL proc");
-                            let w = XdrW::new();
-                            rpc_accept_reply(call.xid, 0, &w.buf)
-                        }
-
-                        1 => {
-                            info!("mountd: MNT proc");
-                            let path = r.get_string().unwrap_or_default();
-                            info!(path = %path, "mountd: MNT path");
-
-                            let ok = self
-                                .exports
-                                .list()
-                                .iter()
-                                .any(|e| e.path == PathBuf::from(&path));
-
-                            let mut w = XdrW::new();
-
-                            if ok {
-                                w.put_u32(0);
-                                let fh = crate::nfs2::fh_from_path(&path);
-                                w.put_opaque(&fh);
-                                w.put_u32(0);
-                            } else {
-                                w.put_u32(13);
-                            }
-
-                            rpc_accept_reply(call.xid, 0, &w.buf)
-                        }
-
-                        3 => {
-                            info!("mountd: UMNT proc");
-                            let _ = r.get_string();
-                            let w = XdrW::new();
-                            rpc_accept_reply(call.xid, 0, &w.buf)
-                        }
-
-                        5 => {
-                            info!("mountd: EXPORT proc");
-                            let mut w = XdrW::new();
-                            let exports = self.exports.list();
-
-                            if exports.is_empty() {
-                                w.put_u32(0);
-                            } else {
-                                w.put_u32(1);
-                                for ex in exports {
-                                    info!(
-                                        path = %ex.path.to_string_lossy(),
-                                        "mountd: exporting path"
-                                    );
-                                    w.put_u32(1);
-                                    w.put_string(&ex.path.to_string_lossy());
-                                    w.put_u32(0);
-                                }
-                                w.put_u32(0);
-                            }
-
-                            rpc_accept_reply(call.xid, 0, &w.buf)
-                        }
-
-                        _ => {
-                            warn!(procid = call.procid, "mountd: unsupported procedure");
-                            let w = XdrW::new();
-                            rpc_accept_reply(call.xid, 0, &w.buf)
-                        }
-                    };
-
-                    if let Err(e) = sock.send_to(&reply, peer).await {
-                        warn!(?e, peer = %peer, "mountd: send reply failed");
-                    } else {
-                        info!(
-                            peer = %peer,
-                            size = reply.len(),
-                            "mountd: reply sent"
-                        );
-                    }
+            if let Some(reply) = self.handle_call(&buf[..n]) {
+                if let Err(e) = sock.send_to(&reply, peer).await {
+                    warn!(?e, %peer, "mountd UDP send failed");
                 }
             }
+        }
+    }
+
+    /// TCP server (record-marked RPC)
+    pub async fn run_tcp(self, listener: TcpListener) {
+        let local = listener.local_addr().ok();
+        info!(?local, "mountd listening (TCP)");
+
+        loop {
+            let (mut stream, peer) = match listener.accept().await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(?e, "mountd TCP accept failed");
+                    continue;
+                }
+            };
+
+            let this = self.clone();
+
+            tokio::spawn(async move {
+                info!(%peer, "mountd TCP connected");
+
+                loop {
+                    let mut hdr = [0u8; 4];
+                    if stream.read_exact(&mut hdr).await.is_err() {
+                        break;
+                    }
+
+                    let marker = u32::from_be_bytes(hdr);
+                    let len = (marker & 0x7fff_ffff) as usize;
+
+                    let mut buf = vec![0u8; len];
+                    if stream.read_exact(&mut buf).await.is_err() {
+                        break;
+                    }
+
+                    if let Some(reply) = this.handle_call(&buf) {
+                        let mut out = Vec::with_capacity(4 + reply.len());
+                        out.extend_from_slice(&(0x8000_0000u32 | reply.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&reply);
+
+                        if stream.write_all(&out).await.is_err() {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                info!(%peer, "mountd TCP disconnected");
+            });
         }
     }
 }

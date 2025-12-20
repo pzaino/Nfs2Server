@@ -3,23 +3,28 @@
 use crate::{
     export::Exports,
     rpc::{decode_call, rpc_accept_reply},
-    xdr::{XdrCodec, XdrR, XdrW},
+    xdr::{XdrR, XdrW},
 };
 use std::{
     fs, io,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
-use tokio::net::UdpSocket;
-use tracing::{debug, info, warn};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, UdpSocket};
+use tracing::{info, warn};
 
 // NFS v2 program 100003, version 2
+const NFS_PROG: u32 = 100003;
+const NFS_VERS: u32 = 2;
+
 // Implement minimal: NULL(0), GETATTR(1), LOOKUP(4), READ(6), READDIR(16), STATFS(17)
 
 #[derive(Clone)]
 pub struct Nfs2 {
     exports: Exports,
 }
+
 impl Nfs2 {
     pub fn new(exports: Exports) -> Self {
         Self { exports }
@@ -35,6 +40,7 @@ pub fn fh_from_path(path: &str) -> Vec<u8> {
     } else {
         (0, 0, 0, 0, 0)
     };
+
     w.put_u32((dev >> 32) as u32);
     w.put_u32(dev as u32);
     w.put_u32((ino >> 32) as u32);
@@ -43,6 +49,7 @@ pub fn fh_from_path(path: &str) -> Vec<u8> {
     w.put_u32(uid);
     w.put_u32(gid);
     w.put_u32(0);
+
     let mut v = w.buf.to_vec();
     v.resize(32, 0);
     v
@@ -52,6 +59,8 @@ fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
     if fh.len() < 32 {
         return None;
     }
+
+    // low 32 bits of ino as encoded by fh_from_path()
     let ino =
         ((fh[8] as u64) << 24) | ((fh[9] as u64) << 16) | ((fh[10] as u64) << 8) | fh[11] as u64;
 
@@ -70,11 +79,12 @@ fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
         }
         None
     }
+
     find_by_ino(root, ino)
 }
 
 fn xdr_fattr(w: &mut XdrW, meta: &fs::Metadata) {
-    let ftype = if meta.is_dir() { 2 } else { 1 };
+    let ftype = if meta.is_dir() { 2 } else { 1 }; // NFREG=1, NFDIR=2
     w.put_u32(ftype);
     w.put_u32(meta.mode());
     w.put_u32(meta.nlink() as u32);
@@ -111,20 +121,160 @@ fn xdr_fattr(w: &mut XdrW, meta: &fs::Metadata) {
 }
 
 impl Nfs2 {
-    // CHANGED: accept already-bound socket
-    pub async fn run(self, sock: UdpSocket, prog: u32, vers: u32) {
-        let local = match sock.local_addr() {
-            Ok(a) => a,
-            Err(e) => {
-                warn!(?e, "nfsd failed to get local addr");
-                return;
+    /// Core NFS handler (UDP + TCP). Transport independent.
+    pub fn handle_call(&self, buf: &[u8]) -> Option<Vec<u8>> {
+        let (call, ofs) = decode_call(buf)?;
+        if call.prog != NFS_PROG || call.vers != NFS_VERS {
+            return None;
+        }
+
+        // NOTE: unchanged semantics (still hardcoded for now)
+        let export_root = PathBuf::from("/tmp/nfs_export");
+
+        let mut r = XdrR::new(&buf[ofs..]);
+
+        let reply = match call.procid {
+            0 => {
+                // NULL
+                let w = XdrW::new();
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            1 => {
+                // GETATTR
+                let fh = r.get_opaque().unwrap_or_default();
+                let mut w = XdrW::new();
+
+                if let Some(p) = path_from_fh(&export_root, &fh) {
+                    if let Ok(meta) = fs::metadata(&p) {
+                        w.put_u32(0);
+                        xdr_fattr(&mut w, &meta);
+                    } else {
+                        w.put_u32(2);
+                    }
+                } else {
+                    w.put_u32(2);
+                }
+
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            4 => {
+                // LOOKUP(dirfh, name)
+                let dirfh = r.get_opaque().unwrap_or_default();
+                let name = r.get_string().unwrap_or_default();
+                let mut w = XdrW::new();
+
+                if let Some(dir) = path_from_fh(&export_root, &dirfh) {
+                    let path = dir.join(&name);
+                    if let Ok(meta) = fs::metadata(&path) {
+                        w.put_u32(0);
+                        w.put_opaque(&fh_from_path(&path.to_string_lossy()));
+                        xdr_fattr(&mut w, &meta);
+                    } else {
+                        w.put_u32(2);
+                    }
+                } else {
+                    w.put_u32(2);
+                }
+
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            6 => {
+                // READ(fh, offset, count, totalcount)
+                let fh = r.get_opaque().unwrap_or_default();
+                let offset = r.get_u32().unwrap_or(0) as u64;
+                let count = r.get_u32().unwrap_or(0) as usize;
+                let _total = r.get_u32().unwrap_or(0);
+
+                let mut w = XdrW::new();
+
+                if let Some(p) = path_from_fh(&export_root, &fh) {
+                    if let Ok(mut f) = fs::File::open(&p) {
+                        use std::io::{Read, Seek};
+                        let _ = f.seek(io::SeekFrom::Start(offset));
+                        let mut tmp = vec![0u8; count.min(8192)];
+                        let n = f.read(&mut tmp).unwrap_or(0);
+
+                        w.put_u32(0);
+                        w.put_u32((offset + n as u64) as u32);
+                        w.put_opaque(&tmp[..n]);
+                    } else {
+                        w.put_u32(2);
+                    }
+                } else {
+                    w.put_u32(2);
+                }
+
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            16 => {
+                // READDIR(fh, cookie, count)
+                let fh = r.get_opaque().unwrap_or_default();
+                let cookie = r.get_u32().unwrap_or(0);
+                let _count = r.get_u32().unwrap_or(0);
+
+                let mut w = XdrW::new();
+
+                if let Some(p) = path_from_fh(&export_root, &fh) {
+                    if let Ok(read) = fs::read_dir(&p) {
+                        w.put_u32(0);
+                        let mut idx = 0u32;
+
+                        for e in read.flatten() {
+                            if idx < cookie {
+                                idx += 1;
+                                continue;
+                            }
+                            let name = e.file_name().to_string_lossy().into_owned();
+                            w.put_u32(1);
+                            w.put_u32(e.metadata().map(|m| m.ino() as u32).unwrap_or(0));
+                            w.put_string(&name);
+                            w.put_u32(idx + 1);
+                            idx += 1;
+                        }
+
+                        w.put_u32(0);
+                    } else {
+                        w.put_u32(2);
+                    }
+                } else {
+                    w.put_u32(2);
+                }
+
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            17 => {
+                // STATFS
+                let _fh = r.get_opaque().unwrap_or_default();
+                let mut w = XdrW::new();
+                w.put_u32(0);
+                w.put_u32(4096);
+                w.put_u32(4096);
+                w.put_u32(1024);
+                w.put_u32(512);
+                w.put_u32(512);
+                rpc_accept_reply(call.xid, 0, &w.buf)
+            }
+
+            p => {
+                // Unsupported procedure
+                warn!(procid = p, "nfs: unsupported proc");
+                let w = XdrW::new();
+                rpc_accept_reply(call.xid, 0, &w.buf)
             }
         };
 
-        info!(%local, prog, vers, "nfsd listening");
+        Some(reply)
+    }
 
-        // NOTE: unchanged semantics (still hardcoded)
-        let export_root = PathBuf::from("/tmp/nfs_export");
+    /// UDP server
+    pub async fn run_udp(self, sock: UdpSocket) {
+        let local = sock.local_addr().ok();
+        info!(?local, "nfsd listening (UDP)");
 
         let mut buf = vec![0u8; 32768];
 
@@ -133,142 +283,64 @@ impl Nfs2 {
                 continue;
             };
 
-            if let Some((call, ofs)) = decode_call(&buf[..n]) {
-                if call.prog != prog || call.vers != vers {
+            if let Some(reply) = self.handle_call(&buf[..n]) {
+                if let Err(e) = sock.send_to(&reply, peer).await {
+                    warn!(?e, %peer, "nfsd UDP send failed");
+                }
+            }
+        }
+    }
+
+    /// TCP server (record-marked RPC)
+    pub async fn run_tcp(self, listener: TcpListener) {
+        let local = listener.local_addr().ok();
+        info!(?local, "nfsd listening (TCP)");
+
+        loop {
+            let (mut stream, peer) = match listener.accept().await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(?e, "nfsd TCP accept failed");
                     continue;
                 }
+            };
 
-                let mut r = XdrR::new(&buf[ofs..n]);
+            let this = self.clone();
 
-                let reply = match call.procid {
-                    0 => {
-                        let w = XdrW::new();
-                        rpc_accept_reply(call.xid, 0, &w.buf)
+            tokio::spawn(async move {
+                info!(%peer, "nfsd TCP connected");
+
+                loop {
+                    let mut hdr = [0u8; 4];
+                    if stream.read_exact(&mut hdr).await.is_err() {
+                        break;
                     }
 
-                    1 => {
-                        let fh = r.get_opaque().unwrap_or_default();
-                        let mut w = XdrW::new();
+                    let marker = u32::from_be_bytes(hdr);
+                    let len = (marker & 0x7fff_ffff) as usize;
 
-                        if let Some(p) = path_from_fh(&export_root, &fh) {
-                            if let Ok(meta) = fs::metadata(&p) {
-                                w.put_u32(0);
-                                xdr_fattr(&mut w, &meta);
-                            } else {
-                                w.put_u32(2);
-                            }
-                        } else {
-                            w.put_u32(2);
+                    let mut buf = vec![0u8; len];
+                    if stream.read_exact(&mut buf).await.is_err() {
+                        break;
+                    }
+
+                    if let Some(reply) = this.handle_call(&buf) {
+                        let mut out = Vec::with_capacity(4 + reply.len());
+                        out.extend_from_slice(
+                            &(0x8000_0000u32 | (reply.len() as u32)).to_be_bytes(),
+                        );
+                        out.extend_from_slice(&reply);
+
+                        if stream.write_all(&out).await.is_err() {
+                            break;
                         }
-
-                        rpc_accept_reply(call.xid, 0, &w.buf)
+                    } else {
+                        break;
                     }
+                }
 
-                    4 => {
-                        let dirfh = r.get_opaque().unwrap_or_default();
-                        let name = r.get_string().unwrap_or_default();
-                        let mut w = XdrW::new();
-
-                        if let Some(dir) = path_from_fh(&export_root, &dirfh) {
-                            let path = dir.join(&name);
-                            if let Ok(meta) = fs::metadata(&path) {
-                                w.put_u32(0);
-                                w.put_opaque(&fh_from_path(&path.to_string_lossy()));
-                                xdr_fattr(&mut w, &meta);
-                            } else {
-                                w.put_u32(2);
-                            }
-                        } else {
-                            w.put_u32(2);
-                        }
-
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-
-                    6 => {
-                        let fh = r.get_opaque().unwrap_or_default();
-                        let offset = r.get_u32().unwrap_or(0) as u64;
-                        let count = r.get_u32().unwrap_or(0) as usize;
-                        let _total = r.get_u32().unwrap_or(0);
-
-                        let mut w = XdrW::new();
-
-                        if let Some(p) = path_from_fh(&export_root, &fh) {
-                            if let Ok(mut f) = fs::File::open(&p) {
-                                use std::io::{Read, Seek};
-                                let _ = f.seek(io::SeekFrom::Start(offset));
-                                let mut buf = vec![0u8; count.min(8192)];
-                                let n = f.read(&mut buf).unwrap_or(0);
-
-                                w.put_u32(0);
-                                w.put_u32((offset + n as u64) as u32);
-                                w.put_opaque(&buf[..n]);
-                            } else {
-                                w.put_u32(2);
-                            }
-                        } else {
-                            w.put_u32(2);
-                        }
-
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-
-                    16 => {
-                        let fh = r.get_opaque().unwrap_or_default();
-                        let cookie = r.get_u32().unwrap_or(0);
-                        let _count = r.get_u32().unwrap_or(0);
-
-                        let mut w = XdrW::new();
-
-                        if let Some(p) = path_from_fh(&export_root, &fh) {
-                            if let Ok(read) = fs::read_dir(&p) {
-                                w.put_u32(0);
-                                let mut idx = 0u32;
-
-                                for e in read.flatten() {
-                                    if idx < cookie {
-                                        idx += 1;
-                                        continue;
-                                    }
-                                    let name = e.file_name().to_string_lossy().into_owned();
-                                    w.put_u32(1);
-                                    w.put_u32(e.metadata().map(|m| m.ino() as u32).unwrap_or(0));
-                                    w.put_string(&name);
-                                    w.put_u32(idx + 1);
-                                    idx += 1;
-                                }
-
-                                w.put_u32(0);
-                            } else {
-                                w.put_u32(2);
-                            }
-                        } else {
-                            w.put_u32(2);
-                        }
-
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-
-                    17 => {
-                        let _fh = r.get_opaque().unwrap_or_default();
-                        let mut w = XdrW::new();
-                        w.put_u32(0);
-                        w.put_u32(4096);
-                        w.put_u32(4096);
-                        w.put_u32(1024);
-                        w.put_u32(512);
-                        w.put_u32(512);
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-
-                    _ => {
-                        let w = XdrW::new();
-                        rpc_accept_reply(call.xid, 0, &w.buf)
-                    }
-                };
-
-                let _ = sock.send_to(&reply, peer).await;
-            }
+                info!(%peer, "nfsd TCP disconnected");
+            });
         }
     }
 }
