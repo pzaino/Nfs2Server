@@ -168,7 +168,7 @@ impl Nfs2 {
                             path = %p.display(),
                             size = meta.len(),
                             ino = meta.ino(),
-                            mode = format_args!("{:o}", meta.permissions().mode()),
+                            mode = format_args!("{:o}", meta.mode()),
                             "nfs2: GETATTR metadata"
                         );
                         w.put_u32(NFS_OK);
