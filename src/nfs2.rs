@@ -84,21 +84,30 @@ fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
 fn put_fattr(w: &mut XdrW, meta: &fs::Metadata) {
     let ftype = if meta.is_dir() { 2 } else { 1 };
 
-    w.put_u32(ftype);
-    w.put_u32(meta.mode());
-    w.put_u32(meta.nlink() as u32);
-    w.put_u32(meta.uid());
-    w.put_u32(meta.gid());
-    w.put_u32(meta.len() as u32);
-    w.put_u32(meta.len() as u32);
+    let blocks = (meta.len() + 511) / 512;
 
-    let secs = |t: i64| -> u32 { if t < 0 { 0 } else { t as u32 } };
+    w.put_u32(ftype); // type
+    w.put_u32(meta.mode()); // mode
+    w.put_u32(meta.nlink() as u32); // nlink
+    w.put_u32(meta.uid()); // uid
+    w.put_u32(meta.gid()); // gid
+    w.put_u32(meta.len() as u32); // size
+    w.put_u32(4096); // blocksize
+    w.put_u32(0); // rdev
+    w.put_u32(blocks as u32); // blocks
+    w.put_u32(0); // fsid
+    w.put_u32(meta.ino() as u32); // fileid
 
-    w.put_u32(secs(meta.atime()));
+    // atime
+    w.put_u32(meta.atime() as u32);
     w.put_u32(0);
-    w.put_u32(secs(meta.mtime()));
+
+    // mtime
+    w.put_u32(meta.mtime() as u32);
     w.put_u32(0);
-    w.put_u32(secs(meta.ctime()));
+
+    // ctime
+    w.put_u32(meta.ctime() as u32);
     w.put_u32(0);
 }
 
