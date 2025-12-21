@@ -65,12 +65,14 @@ fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
 
     fn walk(base: &Path, target: u64) -> Option<PathBuf> {
         let meta = fs::symlink_metadata(base).ok()?;
+        debug!("nfs2: path_from_fh walking base={}", base.display());
         if meta.ino() == target {
             debug!("nfs2: path_from_fh found target={}", target);
             return Some(base.to_path_buf());
         }
 
         if meta.is_dir() {
+            debug!("nfs2: path_from_fh walking dir={}", base.display());
             for e in fs::read_dir(base).ok()? {
                 let p = e.ok()?.path();
                 if let Some(found) = walk(&p, target) {
@@ -82,6 +84,7 @@ fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
         None
     }
 
+    debug!("path_from_fh: extracted ino={} (0x{:x})", ino, ino);
     walk(root, ino)
 }
 
@@ -392,7 +395,6 @@ impl Nfs2 {
                         debug!("nfs2: READDIR reply={:?}", w.buf);
                     } else {
                         w.put_u32(NFSERR_NOENT);
-                        eof = true;
                         debug!("nfs2: READDIR no entry");
                     }
                 } else {
