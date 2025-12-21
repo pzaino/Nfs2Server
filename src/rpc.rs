@@ -5,6 +5,7 @@ use anyhow::Result;
 //use serde::de;
 use tokio::net::UdpSocket;
 use tracing::debug;
+use tracing::{info, warn};
 
 pub const RPC_VERSION: u32 = 2;
 pub const RPCBIND_PROGRAM: u32 = 100000;
@@ -51,12 +52,15 @@ pub fn decode_call(pkt: &[u8]) -> Option<(RpcCall, usize)> {
 
     let xid = r.get_u32().ok()?;
     let mtype = r.get_u32().ok()?;
+    debug!("RPC message xid={} mtype={}", xid, mtype);
     if mtype != MsgType::Call as u32 {
+        debug!("nfs2: ignoring non-call message");
         return None;
     }
 
     let rpcvers = r.get_u32().ok()?;
     if rpcvers != RPC_VERSION {
+        debug!("nfs2: unsupported RPC version {}", rpcvers);
         return None;
     }
 
@@ -73,6 +77,11 @@ pub fn decode_call(pkt: &[u8]) -> Option<(RpcCall, usize)> {
     let _verf_flavor = r.get_u32().ok()?;
     let verf_len = r.get_u32().ok()? as usize;
     r.skip_bytes(verf_len).ok()?;
+
+    debug!(
+        "RPC CALL received xid={} prog={} vers={} procid={}",
+        xid, prog, vers, procid
+    );
 
     Some((
         RpcCall {
