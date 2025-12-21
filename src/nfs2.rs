@@ -250,6 +250,8 @@ impl Nfs2 {
                         put_fattr(&mut w, &meta, &p);
                     } else {
                         w.put_u32(NFSERR_NOENT);
+                        // Log meta failure
+                        info!(peer, path = %p.display(), "nfs2: GETATTR metadata failed");
                     }
                 } else {
                     w.put_u32(NFSERR_NOENT);
