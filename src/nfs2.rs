@@ -240,6 +240,7 @@ impl Nfs2 {
                     hex::encode(&fh)
                 );
                 if let Some(p) = path_from_fh(root, &fh) {
+                    debug!("nfs2: GETATTR resolved path={}", p.display());
                     if let Ok(meta) = fs::metadata(&p) {
                         info!(
                             peer,
@@ -346,6 +347,7 @@ impl Nfs2 {
                     hex::encode(&fh)
                 );
                 if let Some(dir) = path_from_fh(root, &fh) {
+                    debug!("nfs2: READDIR resolved dir={}", dir.display());
                     if let Ok(rd) = fs::read_dir(&dir) {
                         w.put_u32(NFS_OK);
 
@@ -387,8 +389,11 @@ impl Nfs2 {
 
                         w.put_u32(0); // end of entry list
                         w.put_u32(if eof { 1 } else { 0 }); // EOF flag
+                        debug!("nfs2: READDIR reply={:?}", w.buf);
                     } else {
                         w.put_u32(NFSERR_NOENT);
+                        eof = true;
+                        debug!("nfs2: READDIR no entry");
                     }
                 } else {
                     w.put_u32(NFSERR_STALE);
