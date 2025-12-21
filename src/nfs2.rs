@@ -5,7 +5,7 @@ use crate::mountd::MountTable;
 use crate::rpc::{decode_call, rpc_accept_reply, rpc_prog_mismatch_reply};
 use crate::xdr::{XdrR, XdrW};
 use hex;
-use tracing_subscriber::field::debug;
+//use tracing_subscriber::field::debug;
 
 use std::{
     fs,
@@ -16,7 +16,7 @@ use std::{
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 const NFS_PROG: u32 = 100003;
 const NFS_VERS: u32 = 2;
@@ -154,6 +154,22 @@ fn put_fattr(w: &mut XdrW, meta: &std::fs::Metadata, path: &Path) {
     w.put_u32(0);
     w.put_u32(ctime);
     w.put_u32(0);
+    // log all fattr fields
+    debug!(
+        path = %path.display(),
+        ftype,
+        mode = format_args!("{:o}", mode),
+        nlink,
+        uid = meta.uid(),
+        gid = meta.gid(),
+        size,
+        blocks,
+        fileid,
+        atime,
+        mtime,
+        ctime,
+        "nfs2: file attributes"
+    );
 }
 
 // ------------------------------------------------------------
