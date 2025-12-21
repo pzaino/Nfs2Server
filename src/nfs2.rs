@@ -54,8 +54,9 @@ pub fn fh_from_path(path: &Path) -> Vec<u8> {
 }
 
 fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
-    info!("nfs2: path_from_fh fh_hex={}", hex::encode(fh));
+    debug!("nfs2: path_from_fh fh_hex={}", hex::encode(fh));
     if fh.len() != 32 {
+        debug!("nfs2: path_from_fh invalid fh length={}", fh.len());
         return None;
     }
 
@@ -65,6 +66,7 @@ fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
     fn walk(base: &Path, target: u64) -> Option<PathBuf> {
         let meta = fs::symlink_metadata(base).ok()?;
         if meta.ino() == target {
+            debug!("nfs2: path_from_fh found target={}", target);
             return Some(base.to_path_buf());
         }
 
@@ -72,6 +74,7 @@ fn path_from_fh(root: &Path, fh: &[u8]) -> Option<PathBuf> {
             for e in fs::read_dir(base).ok()? {
                 let p = e.ok()?.path();
                 if let Some(found) = walk(&p, target) {
+                    debug!("nfs2: path_from_fh found target={}", target);
                     return Some(found);
                 }
             }
