@@ -139,7 +139,8 @@ fn put_fattr(w: &mut XdrW, meta: &std::fs::Metadata, path: &Path) {
     let blocks = if is_dir {
         1
     } else {
-        ((meta.len().div_ceil(512) + 511) / 512) as u32
+        //((meta.len().div_ceil(512) + 511) / 512) as u32
+        meta.len().div_ceil(512) as u32
     };
     w.put_u32(blocks);
 
