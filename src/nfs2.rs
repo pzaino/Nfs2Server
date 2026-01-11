@@ -4,6 +4,7 @@ use crate::export::Exports;
 use crate::mountd::MountTable;
 use crate::rpc::{decode_call, rpc_accept_reply, rpc_prog_mismatch_reply};
 use crate::xdr::{XdrR, XdrW};
+#[allow(clippy::single_component_path_imports)]
 use hex;
 //use tracing_subscriber::field::debug;
 
