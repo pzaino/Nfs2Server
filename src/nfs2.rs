@@ -24,7 +24,7 @@ const NFS_VERS: u32 = 2;
 // NFSv2 status codes
 const NFS_OK: u32 = 0;
 const NFSERR_NOENT: u32 = 2;
-const NFSERR_ACCES: u32 = 13;
+//const NFSERR_ACCES: u32 = 13;
 const NFSERR_STALE: u32 = 70;
 
 // ------------------------------------------------------------
@@ -182,6 +182,7 @@ fn put_fattr(w: &mut XdrW, meta: &std::fs::Metadata, path: &Path) {
 
 #[derive(Clone)]
 pub struct Nfs2 {
+    #[allow(dead_code)]
     exports: Exports,
     mounts: MountTable,
 }

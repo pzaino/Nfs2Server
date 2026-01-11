@@ -2,14 +2,32 @@
 
 nfs2-rs is a tiny, educational NFSv2 read only server for retro clients. It implements UDP SunRPC, mount v1, and a small subset of NFSv2. It is not production ready. It exists to help you share files with 80s and 90s machines that only speak NFS v2.
 
-Quick start:
+## How to build
+
+Requires Rust and Cargo. Tested on Linux.
+
+First install Rust from https://rustup.rs/
+
+Then clone and build:
 
 ```sh
-mkdir -p /tmp/nfs_export
-cargo run
-# on a Linux client with v2 available
-sudo mount -t nfs -o vers=2,proto=udp,port=<nfsd_port>,mountport=<mountd_port> <server_ip>:/tmp/nfs_export /mnt
+git clone git@github.com:pzaino/Nfs2Server.git
+cd Nfs2Server
+cargo build --release
 ```
+
+Quick start:
+
+1) edit `exports.toml` to add your export paths
+
+2) run the server with `./target/release/nfs2-rs`
+
+3) Test on Linux:
+
+    ```sh
+    # on a Linux client with v2 available
+    sudo mount -t nfs -o vers=2,proto=udp,port=<nfsd_port>,mountport=<mountd_port> <server_ip>:/tmp/nfs_export /mnt
+    ```
 
 Design notes:
 
