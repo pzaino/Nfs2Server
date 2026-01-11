@@ -139,7 +139,7 @@ fn put_fattr(w: &mut XdrW, meta: &std::fs::Metadata, path: &Path) {
     let blocks = if is_dir {
         1
     } else {
-        ((meta.len() + 511) / 512) as u32
+        ((meta.len().div_ceil(512) + 511) / 512) as u32
     };
     w.put_u32(blocks);
 
@@ -375,7 +375,8 @@ impl Nfs2 {
                             // Estimate how many bytes this entry will add in XDR.
                             // entry = bool(4) + fileid(4) + string(len+pad+4) + cookie(4)
                             // string encoding = u32 len + bytes + padding
-                            let name_len = name.as_bytes().len();
+                            //let name_len = name.as_bytes().len();
+                            let name_len = name.len();
                             let name_pad = (4 - (name_len % 4)) % 4;
                             let entry_bytes = 4 + 4 + (4 + name_len + name_pad) + 4;
 
