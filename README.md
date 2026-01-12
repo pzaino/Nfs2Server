@@ -1,5 +1,7 @@
 # README.md
 
+**WIP: This project is under active development. Features and stability may change.**
+
 nfs2-rs is a tiny, educational NFSv2 read only server for retro clients. It implements UDP SunRPC, mount v1, and a small subset of NFSv2. It is not production ready. It exists to help you share files with 80s and 90s machines that only speak NFS v2.
 
 ## How to build
